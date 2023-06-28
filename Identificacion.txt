@@ -1,0 +1,146 @@
+ public function identifyUser(Request $request)
+    {
+        $users = User::where('group', 'Pacientes')
+                     ->where('role', 'Asegurado')
+                     ->get();
+    
+        if ($request->hasFile('foto')) {
+            $imageFile = $request->file('foto');
+            $extension = $imageFile->getClientOriginalExtension();
+            $fileName = uniqid() . '.' . $extension;
+            $directory = 'reconocimientos';
+            Storage::disk('s3')->putFileAs($directory, $imageFile, $fileName, 'public');
+            $imageUrl = Storage::disk('s3')->url($directory . '/' . $fileName);
+    
+            foreach ($users as $user) {
+                if ($user->foto) {
+                    $image1 = substr($imageUrl, 41, strlen($imageUrl));
+                    $image2 = substr($user->foto, 41, strlen($user->foto));
+    
+                    $client = new RekognitionClient([
+                        'region' => 'us-east-1',
+                        'version' => 'latest',
+                    ]);
+    
+                    $results = $client->compareFaces([
+                        'SimilarityThreshold' => 80,
+                        'SourceImage' => [
+                            'S3Object' => [
+                                'Bucket' => 'mogi-aws-bucket',
+                                'Name' => $image1,
+                            ],
+                        ],
+                        'TargetImage' => [
+                            'S3Object' => [
+                                'Bucket' => 'mogi-aws-bucket',
+                                'Name' => $image2,
+                            ],
+                        ],
+                    ]);
+    
+                    $resultLabels = $results->get('FaceMatches');
+    
+                    if (!empty($resultLabels)) {
+                        return response()->json(['user' => $user], 200);
+                    }
+                }
+            }
+        }
+    
+        return response()->json([], 204);
+    }
+
+
+
+----------------
+
+DART
+
+import 'dart:io';
+import 'dart:typed_data';
+import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+
+class MyScreen extends StatefulWidget {
+  @override
+  _MyScreenState createState() => _MyScreenState();
+}
+
+class _MyScreenState extends State<MyScreen> {
+  Uint8List? _imageBytes;
+
+  Future<void> _pickImage(ImageSource source) async {
+    final pickedFile = await ImagePicker().getImage(source: source);
+    if (pickedFile != null) {
+      final imageBytes = await pickedFile.readAsBytes();
+      setState(() {
+        _imageBytes = imageBytes;
+      });
+    }
+  }
+
+  Future<void> _enviarFoto() async {
+    final pickedFile = await ImagePicker().getImage(source: ImageSource.gallery);
+    if (pickedFile != null) {
+      final foto = File(pickedFile.path);
+      if (await enviarFoto(foto)) {
+        // La foto se envió exitosamente
+      } else {
+        // Error al enviar la foto
+      }
+    }
+  }
+
+ Future<void> enviarFoto(File foto) async {
+  try {
+    final url = Uri.parse('https://apiclinica-production.up.railway.app/api/identifyUser');
+    final request = http.MultipartRequest('POST', url);
+
+    request.files.add(await http.MultipartFile.fromPath('foto', foto.path));
+
+    final response = await request.send();
+    final responseBody = await response.stream.bytesToString();
+    final jsonResponse = json.decode(responseBody);
+
+    // Resto del código...
+  } catch (e) {
+    // Resto del código...
+  }
+}
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('Pantalla de Fotos'),
+      ),
+      body: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            if (_imageBytes != null)
+              Image.memory(
+                _imageBytes!,
+                height: 200,
+                width: 200,
+              ),
+            RaisedButton(
+              onPressed: () => _pickImage(ImageSource.gallery),
+              child: Text('Subir Foto'),
+            ),
+            RaisedButton(
+              onPressed: _enviarFoto,
+              child: Text('Enviar'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+void main() {
+  runApp(MaterialApp(
+    home: MyScreen(),
+  ));
+}
